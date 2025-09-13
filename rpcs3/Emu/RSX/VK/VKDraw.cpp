@@ -319,12 +319,14 @@ void VKGSRender::load_texture_env()
 
 				// Check if non-point filtering can even be used on this format
 				bool can_sample_linear;
+				const auto classified_format_class = rsx::classify_format(texture_format);
+				
 				if (sampler_state->format_class == RSX_FORMAT_CLASS_COLOR) [[likely]]
 				{
 					// Most PS3-like formats can be linearly filtered without problem
 					can_sample_linear = true;
 				}
-				else if (sampler_state->format_class != rsx::classify_format(texture_format) &&
+				else if (sampler_state->format_class != classified_format_class &&
 					(texture_format == CELL_GCM_TEXTURE_A8R8G8B8 || texture_format == CELL_GCM_TEXTURE_D8R8G8B8))
 				{
 					// Depth format redirected to BGRA8 resample stage. Do not filter to avoid bits leaking
@@ -332,11 +334,24 @@ void VKGSRender::load_texture_env()
 				}
 				else
 				{
-					// Not all GPUs support linear filtering of depth formats
-					const auto vk_format = sampler_state->image_handle ? sampler_state->image_handle->image()->format() :
-						vk::get_compatible_sampler_format(m_device->get_formats_support(), sampler_state->external_subresource_desc.gcm_format);
+					// For color float formats, be more permissive with linear filtering
+					// This fixes The Amazing Spider-Man foggy rendering issue on MoltenVK
+					if (classified_format_class == RSX_FORMAT_CLASS_COLOR && 
+						(texture_format == CELL_GCM_TEXTURE_W16_Z16_Y16_X16_FLOAT || 
+						 texture_format == CELL_GCM_TEXTURE_W32_Z32_Y32_X32_FLOAT ||
+						 texture_format == CELL_GCM_TEXTURE_X32_FLOAT))
+					{
+						// Force linear filtering for color float formats
+						can_sample_linear = true;
+					}
+					else
+					{
+						// Not all GPUs support linear filtering of depth formats
+						const auto vk_format = sampler_state->image_handle ? sampler_state->image_handle->image()->format() :
+							vk::get_compatible_sampler_format(m_device->get_formats_support(), sampler_state->external_subresource_desc.gcm_format);
 
-					can_sample_linear = m_device->get_format_properties(vk_format).optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+						can_sample_linear = m_device->get_format_properties(vk_format).optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+					}
 				}
 
 				const auto mipmap_count = tex.get_exact_mipmap_count();
